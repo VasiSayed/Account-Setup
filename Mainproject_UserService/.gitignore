@@ -1,0 +1,16 @@
+/env
+\env
+# --- Virtual environments ---
+env/
+venv/
+.venv/
+
+# --- Environment files (secrets) ---
+.env
+.env.*
+*.env
+**/.env
+**/*.env
+
+# (optional niceties)
+*.log
