@@ -194,7 +194,6 @@ class Company(TenantSoftDeleteModel):
         return f"{org_code} / {self.name}"
 
 
-
 class Entity(TenantSoftDeleteModel):
     organization = models.ForeignKey(
         Organization, on_delete=models.SET_NULL, null=True, blank=True, related_name="entities"
@@ -330,7 +329,6 @@ class RoleModulePermission(TenantSoftDeleteModel):
         return f"{self.role or '-'} → {self.module.code if self.module else '-'}"
 
 
-
 class Building(TenantSoftDeleteModel):
     site = models.ForeignKey("accounts.Site", on_delete=models.CASCADE, related_name="buildings")
     code = models.SlugField(max_length=64)
@@ -370,3 +368,4 @@ class Unit(TenantSoftDeleteModel):
 
     def __str__(self):
         return f"F{self.floor_id}:{self.code} - {self.name}"
+

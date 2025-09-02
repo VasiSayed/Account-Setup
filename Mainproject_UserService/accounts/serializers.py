@@ -699,6 +699,16 @@ from django.conf import settings
 from django.db import connections
 from accounts.utils import register_tenant_db
 
+class LightweightUserSerializer(serializers.ModelSerializer):
+    role_name = serializers.CharField(source="role.name", allow_null=True)
+    department_name = serializers.CharField(source="department.name", allow_null=True)
+
+    class Meta:
+        model = User
+        fields = ["id", "username", "first_name", "last_name", "email", "role_name", "department_name"]
+
+
+
 class UserDatabaseUpdateSerializer(serializers.ModelSerializer):
     db_password_plain = serializers.CharField(write_only=True, required=False, allow_blank=True)
 

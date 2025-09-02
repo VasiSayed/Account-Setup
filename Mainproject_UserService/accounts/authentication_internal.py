@@ -36,5 +36,4 @@ class InternalTokenAuthentication(BaseAuthentication):
         if token != configured:
             raise exceptions.AuthenticationFailed("Invalid internal token")
 
-        # Return an authenticated placeholder user/principal
         return (InternalPrincipal(), None)

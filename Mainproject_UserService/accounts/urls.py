@@ -27,7 +27,8 @@ from .views import (
     FloorViewSet,
     UnitViewSet,
     ProvisionTenantWithModulesAPIView,
-    UserDatabaseByUsernameView
+    UserDatabaseByUsernameView,
+        GlobalBuildingViewSet, GlobalFloorViewSet, GlobalUnitViewSet,UsersWithModulePermissionView
 )
 from .views_user_assign import CurrentTenantUserView
 
@@ -35,8 +36,15 @@ router = DefaultRouter()
 router.register(r"buildings", BuildingViewSet, basename="building")
 router.register(r"floors", FloorViewSet, basename="floor")
 router.register(r"units", UnitViewSet, basename="unit")
+router.register(r'global/buildings', GlobalBuildingViewSet, basename='global-buildings')
+router.register(r'global/floors', GlobalFloorViewSet, basename='global-floors')
+router.register(r'global/units', GlobalUnitViewSet, basename='global-units')
+
 
 urlpatterns = [
+    path("users/with-permission/<str:module_codes>/", UsersWithModulePermissionView.as_view()),
+    path("users/with-permission/", UsersWithModulePermissionView.as_view()),
+
     path("manual-onboard/", ManualOnboardByUsernameAPIView.as_view()),
     path("logout/", logout_view, name="logout"),
     path("auto-onboard/", AutoOnboardByUsernameAPIView.as_view()),

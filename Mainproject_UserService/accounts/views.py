@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import environ
+from django.db.models import Exists, OuterRef, Q
 from accounts.authentication import JWTTenantAuthentication
 from django.db import IntegrityError
 from rest_framework.views import APIView
@@ -49,6 +50,17 @@ from django.utils import timezone
 from django.db.models.functions import Lower
 from django.db import transaction
 
+# accounts/views_tenant_acl.py
+from rest_framework import generics, status
+from rest_framework.response import Response
+
+from accounts.authentication import JWTTenantAuthentication
+from accounts.permissions import IsTenantClient
+from .serializers import (
+    DepartmentSerializer, RoleSerializer, RoleModulePermissionSerializer
+)
+from .models import Department, Role, RoleModulePermission
+
 from config.models import UserDatabase, MainModule
 from .serializers import ProvisionTenantModulesSerializer
 from .utils import onboard_client_db_by_username
@@ -64,6 +76,95 @@ from rest_framework import viewsets
 from accounts.models import Building, Floor, Unit
 from accounts.serializers import BuildingSerializer, FloorSerializer, UnitSerializer
 
+
+from rest_framework import generics
+from accounts.authentication_master import MasterJWTAuthentication
+from .permissions import IsStaffOnly
+from .serializers import OrganizationCreateSerializer, SiteCreateSerializer
+from .models import Organization, Company, Site
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.views import APIView
+from rest_framework import exceptions
+from django.conf import settings
+from django.db import connections
+from config.models import UserDatabase
+from accounts.utils import decrypt_password
+from UserService.db_router import set_current_tenant
+from .permissions_utils import build_permissions_map
+# accounts/views.py
+
+# accounts/views.py
+# accounts/views.py
+
+# accounts/views.py
+# accounts/views_user_assign.py
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+from config.models import UserDatabase
+from .serializers import UserDatabaseReadSerializer, UserDatabaseUpdateSerializer,LightweightUserSerializer
+from accounts.authentication_internal import InternalTokenAuthentication
+
+from accounts.permissions import IsTenantClient  # only staff can create/update users
+from .models import User
+from .serializers import UserCreateUpdateAssignSerializer
+from rest_framework import generics
+from accounts.authentication_master import MasterJWTAuthentication
+from .permissions import IsStaffOnly
+from config.models import UserDatabase
+from .serializers import (
+    UserDatabaseReadSerializer, UserDatabaseUpdateSerializer
+)
+from rest_framework import generics, status
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from accounts.authentication import JWTTenantAuthentication
+from .models import Module, Site
+from .serializers import ModuleSerializer
+from rest_framework import generics
+from rest_framework.response import Response
+from accounts.authentication_master import MasterJWTAuthentication
+from .permissions import IsStaffOnly
+from .serializers import AssignSiteModulesByIdSerializer
+from .serializers import (
+    OrganizationCreateSerializer, SiteCreateSerializer, EntityCreateSerializer
+)
+from .models import Organization, Company, Site, Entity
+from accounts.authentication_master import MasterJWTAuthentication
+from .permissions import IsStaffOnly
+# top:
+import jwt
+from datetime import timedelta
+from django.utils import timezone
+from django.contrib.auth.hashers import check_password
+from config.models import Superadmin
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.conf import settings
+from rest_framework import generics
+from accounts.authentication_master import MasterJWTAuthentication
+from .permissions import IsStaffOnly
+from .models import Company
+from .serializers import CompanyCreateUpdateSerializer  # <-- use the new one
+
+from rest_framework import viewsets, permissions
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from accounts.authentication import JWTTenantAuthentication
+from accounts.models import Building
+from accounts.serializers import BuildingSerializer
+
+from rest_framework import viewsets
+from accounts.models import Building, Floor, Unit
+from accounts.serializers import BuildingSerializer, FloorSerializer, UnitSerializer
+from accounts.permissions import IsTenantClient
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
 
 from rest_framework.views import APIView
@@ -135,17 +236,8 @@ class ClientScopedMixin(APIView):
 
         super().initial(request, *args, **kwargs)
 
-from rest_framework import viewsets
-from accounts.models import Building, Floor, Unit
-from accounts.serializers import BuildingSerializer, FloorSerializer, UnitSerializer
-from accounts.permissions import IsTenantClient
-from rest_framework.decorators import action
-from rest_framework import viewsets
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from accounts.models import Building, Floor, Unit
-from accounts.serializers import BuildingSerializer, FloorSerializer, UnitSerializer
-from accounts.permissions import IsTenantClient
+
+
 
 
 class BuildingViewSet(viewsets.ModelViewSet):
@@ -171,7 +263,7 @@ class BuildingViewSet(viewsets.ModelViewSet):
 
 class FloorViewSet(viewsets.ModelViewSet):
     authentication_classes = [JWTTenantAuthentication]
-    permission_classes = [IsTenantClient]
+    # permission_classes = [IsTenantClient]
     serializer_class = FloorSerializer
 
     def get_queryset(self):
@@ -192,7 +284,7 @@ class FloorViewSet(viewsets.ModelViewSet):
 
 class UnitViewSet(viewsets.ModelViewSet):
     authentication_classes = [JWTTenantAuthentication]
-    permission_classes = [IsTenantClient]
+    # permission_classes = [IsTenantClient]
     serializer_class = UnitSerializer
 
     def get_queryset(self):
@@ -211,6 +303,78 @@ class UnitViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
+class GlobalBuildingViewSet(viewsets.ModelViewSet):
+    authentication_classes = [JWTTenantAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = BuildingSerializer
+
+    def get_queryset(self):
+        alias = self.request.user.tenant_alias  # 🔑 tenant alias from token
+        qs = Building.objects.using(alias).select_related("site")
+        if "is_deleted" in [f.name for f in Building._meta.fields]:
+            qs = qs.filter(is_deleted=False)
+
+        site_id = self.request.query_params.get("site_id")
+        if site_id:
+            qs = qs.filter(site_id=site_id)
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="by-site/(?P<site_id>[^/.]+)")
+    def by_site(self, request, site_id=None):
+        alias = request.user.tenant_alias
+        buildings = Building.objects.using(alias).filter(site_id=site_id, is_deleted=False)
+        serializer = self.get_serializer(buildings, many=True)
+        return Response(serializer.data)
+
+
+class GlobalFloorViewSet(viewsets.ModelViewSet):
+    authentication_classes = [JWTTenantAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = FloorSerializer
+
+    def get_queryset(self):
+        alias = self.request.user.tenant_alias  # tenant DB alias from JWT
+        qs = Floor.objects.using(alias).select_related("building")
+        if "is_deleted" in [f.name for f in Floor._meta.fields]:
+            qs = qs.filter(is_deleted=False)
+
+        building_id = self.request.query_params.get("building_id")
+        if building_id:
+            qs = qs.filter(building_id=building_id)
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="by-building/(?P<building_id>[^/.]+)")
+    def by_building(self, request, building_id=None):
+        alias = request.user.tenant_alias
+        floors = Floor.objects.using(alias).filter(building_id=building_id, is_deleted=False)
+        serializer = self.get_serializer(floors, many=True)
+        return Response(serializer.data)
+
+
+class GlobalUnitViewSet(viewsets.ModelViewSet):
+    authentication_classes = [JWTTenantAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = UnitSerializer
+
+    def get_queryset(self):
+        alias = self.request.user.tenant_alias
+        qs = Unit.objects.using(alias).select_related("floor")
+        if "is_deleted" in [f.name for f in Unit._meta.fields]:
+            qs = qs.filter(is_deleted=False)
+
+        floor_id = self.request.query_params.get("floor_id")
+        if floor_id:
+            qs = qs.filter(floor_id=floor_id)
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="by-floor/(?P<floor_id>[^/.]+)")
+    def by_floor(self, request, floor_id=None):
+        alias = request.user.tenant_alias
+        units = Unit.objects.using(alias).filter(floor_id=floor_id, is_deleted=False)
+        serializer = self.get_serializer(units, many=True)
+        return Response(serializer.data)
+
+
 class AutoOnboardByUsernameAPIView(APIView):
     def post(self, request):
         ser = AutoOnboardByUsernameSerializer(data=request.data)
@@ -221,7 +385,6 @@ class AutoOnboardByUsernameAPIView(APIView):
         data = ser.validated_data
         tenant_username = data["tenant_username"]
 
-        # duplicate by username (ci)
         if UserDatabase.objects.filter(username__iexact=tenant_username).exists():
             print('exitst',UserDatabase.objects.filter(username__iexact=tenant_username))
             return Response(
@@ -229,7 +392,6 @@ class AutoOnboardByUsernameAPIView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # resolve PG super pass
         pg_superpass = data.get("pg_superpass") or os.environ.get("PG_SUPER_PASS")
         if not pg_superpass:
             env = environ.Env()
@@ -397,20 +559,6 @@ def _issue_refresh_jwt(*, user_id: int, username: str, tenant_alias: str, days: 
     return jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
 
 
-from rest_framework import generics
-from accounts.authentication_master import MasterJWTAuthentication
-from .permissions import IsStaffOnly
-from .serializers import OrganizationCreateSerializer, SiteCreateSerializer
-from .models import Organization, Company, Site
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from rest_framework.views import APIView
-from rest_framework import exceptions
-from django.conf import settings
-from django.db import connections
-from config.models import UserDatabase
-from accounts.utils import decrypt_password
-from UserService.db_router import set_current_tenant
-from .permissions_utils import build_permissions_map
 
 
 class LoginView(APIView):
@@ -691,12 +839,7 @@ class OrgCreateView(ClientScopedMixin, generics.ListCreateAPIView):
         return Organization.objects.filter(is_deleted=False).order_by("name")
     
 
-# accounts/views.py
-from rest_framework import generics
-from accounts.authentication_master import MasterJWTAuthentication
-from .permissions import IsStaffOnly
-from .models import Company
-from .serializers import CompanyCreateUpdateSerializer  # <-- use the new one
+
 
 class CompanyListCreateView(ClientScopedMixin, generics.ListCreateAPIView):
     authentication_classes = [MasterJWTAuthentication]
@@ -719,15 +862,7 @@ class CompanyDetailView(ClientScopedMixin, generics.RetrieveUpdateAPIView):
     serializer_class = CompanyCreateUpdateSerializer
     queryset = Company.objects.filter(is_deleted=False)
 
-# class CompanyCreateView(ClientScopedMixin, generics.ListCreateAPIView):
-#     authentication_classes = [MasterJWTAuthentication]
-#     permission_classes = [IsStaffOnly]
-#     serializer_class = CompanyCreateSerializer
-#     def get_queryset(self):
-#         qs = Company.objects.filter(is_deleted=False).order_by("name")
-#         org_id = self.request.query_params.get("organization_id")
-#         if org_id: qs = qs.filter(organization_id=org_id)
-#         return qs
+
 
 class SiteCreateView(ClientScopedMixin, generics.ListCreateAPIView):
     authentication_classes = [MasterJWTAuthentication]
@@ -742,16 +877,7 @@ class SiteCreateView(ClientScopedMixin, generics.ListCreateAPIView):
 
 
 
-# top:
-import jwt
-from datetime import timedelta
-from django.utils import timezone
-from django.contrib.auth.hashers import check_password
-from config.models import Superadmin
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from django.conf import settings
+
 class AdminLoginView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -784,13 +910,6 @@ class AdminLoginView(APIView):
         return Response({"token_type": "Bearer", "access_token": token}, status=200)
 
 
-# accounts/views.py
-from .serializers import (
-    OrganizationCreateSerializer, SiteCreateSerializer, EntityCreateSerializer
-)
-from .models import Organization, Company, Site, Entity
-from accounts.authentication_master import MasterJWTAuthentication
-from .permissions import IsStaffOnly
 
 class EntityCreateView(ClientScopedMixin, generics.ListCreateAPIView):
     authentication_classes = [MasterJWTAuthentication]
@@ -811,12 +930,7 @@ class EntityCreateView(ClientScopedMixin, generics.ListCreateAPIView):
 
 
 
-# accounts/views.py
-from rest_framework import generics
-from rest_framework.response import Response
-from accounts.authentication_master import MasterJWTAuthentication
-from .permissions import IsStaffOnly
-from .serializers import AssignSiteModulesByIdSerializer
+
 # ... your ClientScopedMixin import ...
 
 class AssignSiteModulesView(ClientScopedMixin, generics.GenericAPIView):
@@ -834,13 +948,6 @@ class AssignSiteModulesView(ClientScopedMixin, generics.GenericAPIView):
 
 
 
-# accounts/views.py
-from rest_framework import generics, status
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from accounts.authentication import JWTTenantAuthentication
-from .models import Module, Site
-from .serializers import ModuleSerializer
 
 class SiteModulesListView(generics.ListAPIView):
     """
@@ -878,17 +985,6 @@ class SiteModulesListView(generics.ListAPIView):
 
 
 
-
-# accounts/views_tenant_acl.py
-from rest_framework import generics, status
-from rest_framework.response import Response
-
-from accounts.authentication import JWTTenantAuthentication
-from accounts.permissions import IsTenantClient
-from .serializers import (
-    DepartmentSerializer, RoleSerializer, RoleModulePermissionSerializer
-)
-from .models import Department, Role, RoleModulePermission
 
 
 class SoftDeleteDestroyMixin:
@@ -997,21 +1093,7 @@ class RoleModulePermissionDetailView(SoftDeleteDestroyMixin, generics.RetrieveUp
             qs = qs.filter(is_deleted=False)
         return qs
 # accounts/views_user_assign.py
-# accounts/views_user_assign.py
-from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated
 
-
-from accounts.permissions import IsTenantClient  # only staff can create/update users
-from .models import User
-from .serializers import UserCreateUpdateAssignSerializer
-from rest_framework import generics
-from accounts.authentication_master import MasterJWTAuthentication
-from .permissions import IsStaffOnly
-from config.models import UserDatabase
-from .serializers import (
-    UserDatabaseReadSerializer, UserDatabaseUpdateSerializer
-)
 
 class TenantUserListCreateView(generics.ListCreateAPIView):
     """
@@ -1098,13 +1180,6 @@ class UserDatabaseDetailView(generics.RetrieveUpdateAPIView):
 
 
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-
-from config.models import UserDatabase
-from .serializers import UserDatabaseReadSerializer, UserDatabaseUpdateSerializer
-from accounts.authentication_internal import InternalTokenAuthentication
 
 class UserDatabaseByUsernameView(APIView):
     """
@@ -1113,7 +1188,7 @@ class UserDatabaseByUsernameView(APIView):
     Auth: Internal token
     """
     authentication_classes = [InternalTokenAuthentication]
-    permission_classes = []  # internal token is enough
+    permission_classes = [] 
 
     def get(self, request, username: str):
         row = UserDatabase.objects.filter(username__iexact=username).first()
@@ -1130,10 +1205,6 @@ class UserDatabaseByUsernameView(APIView):
         ser.is_valid(raise_exception=True)
         ser.save()
         return Response(UserDatabaseReadSerializer(row).data, status=200)
-
-
-
-
 
 
 class RefreshTokenView(APIView):
@@ -1185,4 +1256,134 @@ class RefreshTokenView(APIView):
                 },
             },
             status=200,
+        )
+
+
+        
+
+
+class UsersWithModulePermissionView(generics.ListAPIView):
+    """
+    GET /api/users/with-permission/<module_codes>/
+       - e.g. /api/users/with-permission/Fnb,Ast/
+    or
+    GET /api/users/with-permission/?module_codes=Fnb,Ast
+    or
+    GET /api/users/with-permission/?module_codes=Fnb&module_codes=Ast
+    (back-compat) GET /api/users/with-permission/?module_code=Fnb
+
+    Returns users where for ANY of the provided modules:
+      - role-specific RoleModulePermission(can_view=1, can_update=1), OR
+      - department-wide RoleModulePermission(for_all=1, can_view=1, can_update=1).
+    """
+    authentication_classes = [JWTTenantAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = LightweightUserSerializer
+
+    def _parse_codes(self, request, **kwargs):
+        codes = []
+        path_codes = (kwargs.get("module_codes") or "").strip()
+        if path_codes:
+            codes += [c.strip() for c in path_codes.split(",") if c.strip()]
+
+        # ?module_codes=Fnb,Ast
+        csv = (request.query_params.get("module_codes") or "").strip()
+        if csv:
+            codes += [c.strip() for c in csv.split(",") if c.strip()]
+
+        # ?module_codes=Fnb&module_codes=Ast
+        repeated = request.query_params.getlist("module_codes")
+        for item in repeated:
+            if item and "," in item:
+                codes += [c.strip() for c in item.split(",") if c.strip()]
+            elif item:
+                codes.append(item.strip())
+
+        # back-compat: ?module_code=Fnb
+        single = (request.query_params.get("module_code") or "").strip()
+        if single:
+            codes.append(single)
+
+        # de-dup while preserving order
+        seen, uniq = set(), []
+        for c in codes:
+            if c and c.lower() not in seen:
+                seen.add(c.lower())
+                uniq.append(c)
+        return uniq
+
+    def get_queryset(self):
+        codes = self._parse_codes(self.request, **self.kwargs)
+        if not codes:
+            return User.objects.none()
+
+        codes_lower = [c.lower() for c in codes]
+        # resolve module IDs case-insensitively
+        modules_qs = (
+            Module.objects
+            .annotate(code_ci=Lower("code"))
+            .filter(is_deleted=False, code_ci__in=codes_lower)
+        )
+        module_ids = list(modules_qs.values_list("id", flat=True))
+        if not module_ids:
+            return User.objects.none()
+
+        # role-specific permission
+        role_perm_sq = RoleModulePermission.objects.filter(
+            is_deleted=False,
+            role_id=OuterRef("role_id"),
+            module_id__in=module_ids,
+            can_view=True,
+            can_update=True,
+        )
+
+        # department-wide for_all permission
+        dept_all_sq = RoleModulePermission.objects.filter(
+            is_deleted=False,
+            role__isnull=True,
+            department_id=OuterRef("department_id"),
+            module_id__in=module_ids,
+            for_all=True,
+            can_view=True,
+            can_update=True,
+        )
+
+        qs = (
+            User.objects
+            .filter(is_deleted=False, is_active=True)
+            .annotate(
+                has_role_perm=Exists(role_perm_sq),
+                has_dept_perm=Exists(dept_all_sq),
+            )
+            .filter(Q(has_role_perm=True) | Q(has_dept_perm=True))
+            .select_related("role", "department")
+            .order_by("username")
+        )
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        codes = self._parse_codes(request, **kwargs)
+        qs = self.get_queryset()
+        ser = self.get_serializer(qs, many=True)
+
+        # Echo back matched & unknown modules
+        codes_lower = [c.lower() for c in codes]
+        mods = (
+            Module.objects
+            .annotate(code_ci=Lower("code"))
+            .filter(is_deleted=False, code_ci__in=codes_lower)
+            .values("id", "code", "name")
+        )
+        matched_codes = {m["code"].lower(): m for m in mods}
+        unknown = [c for c in codes if c.lower() not in matched_codes]
+
+        return Response(
+            {
+                "input_codes": codes,
+                "matched_modules": list(mods),
+                "unknown_codes": unknown,
+                "count": len(ser.data),
+                "users": ser.data,
+            },
+            status=status.HTTP_200_OK,
         )

@@ -12,8 +12,6 @@ class IsStaffOnly(BasePermission):
             and getattr(u, "is_staff", False) 
         )
 
-
-
 class IsTenantClient(BasePermission):
     message = "Only client users can access this endpoint."
 
